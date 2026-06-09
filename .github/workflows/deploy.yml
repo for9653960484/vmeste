@@ -129,7 +129,7 @@ jobs:
               --name "$LANDING_CONTAINER" \
               --network "$NETWORK_NAME" \
               --restart unless-stopped \
-              -p 8080:8080 \
+              -p 8081:8080 \
               --env-file "$APP_DIR/.env" \
               -e CRM_API_URL=http://vmeste-api:8000/lead \
               --add-host=host.docker.internal:host-gateway \

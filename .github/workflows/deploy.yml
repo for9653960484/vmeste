@@ -116,7 +116,7 @@ jobs:
               --name "$API_CONTAINER" \
               --network "$NETWORK_NAME" \
               --restart unless-stopped \
-              -p 8000:8000 \
+              -p 8001:8000 \
               --env-file "$APP_DIR/.env" \
               --add-host=host.docker.internal:host-gateway \
               "$API_IMAGE"

@@ -1,0 +1,5 @@
+flask
+Flask-Limiter
+redis
+requests
+python-dotenv

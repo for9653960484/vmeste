@@ -1,0 +1,11 @@
+flask
+Flask-Limiter
+redis
+pydantic
+email-validator
+sqlalchemy
+psycopg[binary]
+psycopg2-binary
+requests
+openpyxl
+python-dotenv

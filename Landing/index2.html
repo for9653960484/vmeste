@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VMESTE | Потери из-за слабых руководителей</title>
+  <style>
+    body { margin: 0; font-family: Arial, sans-serif; background: #f3f6fb; color: #1b2330; }
+    .wrap { max-width: 760px; margin: 0 auto; padding: 24px; }
+    .card { background: #fff; border: 1px solid #dbe3f0; border-radius: 12px; padding: 20px; }
+    h1 { margin: 0 0 10px; font-size: 28px; }
+    .sub { margin: 0 0 18px; color: #5d6b82; }
+    .grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+    label { display: block; margin-bottom: 6px; font-size: 13px; color: #445067; }
+    input, select, button { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid #c8d2e3; box-sizing: border-box; }
+    input:invalid:focus { border-color: #d94848; }
+    .required::after { content: " *"; color: #d94848; }
+    .check-row { display: flex; gap: 8px; margin-top: 12px; align-items: flex-start; }
+    .check-row input { width: auto; margin-top: 3px; }
+    .btn { margin-top: 12px; background: #1e63ff; color: #fff; border: none; font-weight: 600; cursor: pointer; }
+    .btn[disabled] { background: #9db8f5; cursor: not-allowed; }
+    .notice { display: none; margin: 0 0 12px 0; padding: 10px 12px; border-radius: 8px; font-weight: 600; position: sticky; top: 10px; z-index: 10; }
+    .notice.ok { display: block; background: #e6f9ee; color: #1f7a3f; border: 1px solid #b5e9c7; }
+    .notice.err { display: block; background: #ffecec; color: #9f2f2f; border: 1px solid #f7bcbc; }
+    .hp-field { position: absolute; left: -10000px; top: auto; width: 1px; height: 1px; overflow: hidden; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Сколько компания теряет из-за слабых руководителей</h1>
+      <p class="sub">Заполните форму и получите материалы с оценкой управленческих потерь и точками роста.</p>
+      <div id="notice" class="notice"></div>
+
+      <form id="leadForm" novalidate autocomplete="off">
+        <div class="hp-field" aria-hidden="true">
+          <label for="website">Ваш сайт</label>
+          <input id="website" name="website" type="text" tabindex="-1" autocomplete="off" />
+        </div>
+        <div class="grid">
+          <div>
+            <label class="required" for="last_name">Фамилия</label>
+            <input id="last_name" name="last_name" required pattern="^[А-Яа-яЁё\-\s]+$" title="Только кириллица, пробел и дефис" autocomplete="off" />
+          </div>
+          <div>
+            <label class="required" for="first_name">Имя</label>
+            <input id="first_name" name="first_name" required pattern="^[А-Яа-яЁё\-\s]+$" title="Только кириллица, пробел и дефис" autocomplete="off" />
+          </div>
+          <div>
+            <label class="required" for="phone">Телефон</label>
+            <input id="phone" name="phone" required pattern="^\+7\d{10}$" placeholder="+79991234567" title="Формат: +7 и 10 цифр, например +79991234567" autocomplete="off" />
+          </div>
+          <div>
+            <label class="required" for="email">Почта</label>
+            <input id="email" name="email" type="email" required autocomplete="off" />
+          </div>
+          <div>
+            <label for="company_name">Компания</label>
+            <input id="company_name" name="company_name" autocomplete="off" />
+          </div>
+          <div>
+            <label for="position">Должность</label>
+            <select id="position" name="position">
+              <option value="other">Выберите</option>
+              <option value="owner">Собственник</option>
+              <option value="ceo">Генеральный директор</option>
+              <option value="hrd">HR-директор</option>
+              <option value="director_of_development">Директор по развитию</option>
+              <option value="head_of_corporate_university">Руководитель корпоративного университета</option>
+              <option value="other">Другое</option>
+            </select>
+          </div>
+          <div>
+            <label for="employees_count">Количество сотрудников в компании</label>
+            <select id="employees_count" name="employees_count">
+              <option value="">Выберите диапазон</option>
+              <option value="5">1-10</option>
+              <option value="25">11-50</option>
+              <option value="75">51-100</option>
+              <option value="150">101-200</option>
+              <option value="300">201-500</option>
+              <option value="700">501+</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="check-row">
+          <input id="consent" type="checkbox" />
+          <label for="consent">Я даю согласие на сбор и обработку персональных данных.</label>
+        </div>
+        <div class="check-row">
+          <input id="marketing_consent" type="checkbox" />
+          <label for="marketing_consent">Я согласен(а) на получение рассылки информационных материалов.</label>
+        </div>
+
+        <button id="submitBtn" class="btn" type="submit" disabled>Получить материалы</button>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById("leadForm");
+    const consent = document.getElementById("consent");
+    const marketingConsent = document.getElementById("marketing_consent");
+    const submitBtn = document.getElementById("submitBtn");
+    const notice = document.getElementById("notice");
+    const email = document.getElementById("email");
+    const phone = document.getElementById("phone");
+    const firstName = document.getElementById("first_name");
+    const lastName = document.getElementById("last_name");
+    const loadedAt = Date.now();
+    const phoneRegex = /^\+7\d{10}$/;
+    const cyrillicNameRegex = /^[А-Яа-яЁё\-\s]+$/;
+
+    function showNotice(kind, text) {
+      notice.className = "notice " + kind;
+      notice.textContent = text;
+    }
+
+    function formatErrorDetails(details) {
+      if (!details) return "неизвестно";
+      if (typeof details === "string") return details;
+      if (Array.isArray(details)) return details.map((item) => JSON.stringify(item)).join("; ");
+      if (typeof details === "object") return JSON.stringify(details);
+      return String(details);
+    }
+
+    function updateSubmitState() {
+      submitBtn.disabled = !(consent.checked && marketingConsent.checked);
+    }
+
+    consent.addEventListener("change", updateSubmitState);
+    marketingConsent.addEventListener("change", updateSubmitState);
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+
+      if (!form.checkValidity()) {
+        form.reportValidity();
+        return;
+      }
+
+      if (!email.validity.valid) {
+        showNotice("err", "Проверьте корректность email-адреса.");
+        return;
+      }
+      if (!cyrillicNameRegex.test(firstName.value.trim())) {
+        showNotice("err", "Имя должно быть введено кириллицей.");
+        return;
+      }
+      if (!cyrillicNameRegex.test(lastName.value.trim())) {
+        showNotice("err", "Фамилия должна быть введена кириллицей.");
+        return;
+      }
+      if (!phoneRegex.test(phone.value.trim())) {
+        showNotice("err", "Проверьте телефон: формат должен быть +7XXXXXXXXXX.");
+        return;
+      }
+      if (!consent.checked) {
+        showNotice("err", "Необходимо согласие на обработку персональных данных.");
+        return;
+      }
+      if (!marketingConsent.checked) {
+        showNotice("err", "Необходимо согласие на получение рассылки материалов.");
+        return;
+      }
+
+      const payload = {
+        landing_id: "landing-2",
+        last_name: form.last_name.value.trim(),
+        first_name: form.first_name.value.trim(),
+        phone: form.phone.value.trim(),
+        email: form.email.value.trim(),
+        position: form.position.value,
+        company_name: form.company_name.value.trim(),
+        employees_count: form.employees_count.value ? Number(form.employees_count.value) : null,
+        marketing_consent: document.getElementById("marketing_consent").checked,
+        website: form.website.value.trim(),
+        loaded_at: loadedAt,
+        consent: true
+      };
+
+      try {
+        const response = await fetch("/api/submit-lead", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          showNotice("err", "Ошибка отправки: " + formatErrorDetails(data.details || data.error));
+          return;
+        }
+        showNotice("ok", "Контактные данные получены. Переходим к отправке запрошенных материалов.");
+        form.reset();
+        updateSubmitState();
+      } catch (err) {
+        showNotice("err", "Сетевая ошибка: " + String(err));
+      }
+    });
+  </script>
+</body>
+</html>

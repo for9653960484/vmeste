@@ -9,6 +9,7 @@ from typing import Optional
 
 import openpyxl
 import requests
+import time
 from dotenv import load_dotenv
 from flask import Flask, jsonify, redirect, render_template_string, request, send_file, send_from_directory
 from postgres_driver import PostgreSQLDriver
@@ -785,6 +786,23 @@ def build_leads_xlsx(leads_payload: list[dict]) -> BytesIO:
     output.seek(0)
     return output
 
+def unisender_post(url: str, payload: dict, *, retries: int = 3, timeout: int = 20) -> requests.Response:
+    last_exc: Exception | None = None
+    for attempt in range(retries):
+        try:
+            response = requests.post(url, data=payload, timeout=timeout)
+            response.raise_for_status()
+            return response
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+            last_exc = exc
+            if attempt < retries - 1:
+                time.sleep(2**attempt)
+    raise last_exc or RuntimeError("UniSender request failed")
+
+
+def is_unisender_send_email_plan_error(error_text: str) -> bool:
+    lowered = error_text.lower()
+    return "free plan" in lowered or "confirmed emails only" in lowered
 
 # Отправка контакта во внешний сервис рассылок (не блокирует API-ответ).
 def send_to_email_service(data: dict) -> None:
@@ -823,15 +841,14 @@ def send_to_email_service(data: dict) -> None:
             "double_optin": 0,
             "overwrite": 2,
         }
-        subscribe_response = requests.post(
-            f"{UNISENDER_API_BASE_URL}/subscribe", data=subscribe_payload, timeout=15
+        subscribe_response = unisender_post(
+            f"{UNISENDER_API_BASE_URL}/subscribe", subscribe_payload
         )
-        subscribe_response.raise_for_status()
         subscribe_json = subscribe_response.json()
         if subscribe_json.get("error"):
             raise RuntimeError(f"UniSender subscribe error: {subscribe_json}")
 
-        # 2) Отправляем письмо с материалом.
+        # 2) Отправляем письмо с материалом (ошибка sendEmail не отменяет успешный subscribe).
         html_body = (
             "<p>Спасибо за заявку!</p>"
             "<p>Ваш запрошенный материал доступен по ссылке:</p>"
@@ -847,11 +864,26 @@ def send_to_email_service(data: dict) -> None:
             "body": html_body,
             "list_id": UNISENDER_LIST_IDS.split(",")[0] if UNISENDER_LIST_IDS else "",
         }
-        send_response = requests.post(f"{UNISENDER_API_BASE_URL}/sendEmail", data=send_payload, timeout=15)
-        send_response.raise_for_status()
-        send_json = send_response.json()
-        if send_json.get("error"):
-            raise RuntimeError(f"UniSender sendEmail error: {send_json}")
+        send_error: str | None = None
+        try:
+            send_response = unisender_post(
+                f"{UNISENDER_API_BASE_URL}/sendEmail", send_payload
+            )
+            send_json = send_response.json()
+            if send_json.get("error"):
+                error_text = str(send_json.get("error"))
+                send_error = error_text[:500]
+                if is_unisender_send_email_plan_error(error_text):
+                    logger.warning("UniSender sendEmail skipped (free plan): %s", error_text)
+                else:
+                    logger.warning("UniSender sendEmail error: %s", error_text)
+        except Exception as send_exc:
+            error_text = str(send_exc)
+            send_error = (error_text.splitlines()[0] if error_text else send_exc.__class__.__name__)[:500]
+            if is_unisender_send_email_plan_error(error_text):
+                logger.warning("UniSender sendEmail skipped (free plan): %s", error_text)
+            else:
+                logger.warning("UniSender sendEmail failed: %s", error_text)
 
         driver.execute_non_query(
             """
@@ -859,10 +891,10 @@ def send_to_email_service(data: dict) -> None:
             SET mailing_sent = %s,
                 mailing_sent_at = NOW(),
                 mailing_provider = %s,
-                mailing_error = NULL
+                mailing_error = %s
             WHERE id = %s
             """,
-            (True, "unisender", lead_id),
+            (True, "unisender", send_error, lead_id),
         )
         logger.info("UniSender sync completed for lead %s", lead_id)
     except Exception as exc:

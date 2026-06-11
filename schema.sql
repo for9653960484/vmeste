@@ -69,8 +69,8 @@ CREATE TABLE leads (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Обычно нельзя допускать точные дубли контактов по связке company+email.
-CREATE UNIQUE INDEX uq_leads_company_email ON leads (company_name, email);
+-- Повторные регистрации с той же компанией и email допускаются.
+CREATE INDEX idx_leads_company_email ON leads (company_name, email);
 CREATE INDEX idx_leads_source_created_at ON leads (source, created_at DESC);
 CREATE INDEX idx_leads_created_at ON leads (created_at DESC);
 

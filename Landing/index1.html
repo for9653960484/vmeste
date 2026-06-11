@@ -22,6 +22,7 @@
     .small { font-size: 12px; color: #6a778d; margin-top: 8px; }
     .notice { display: none; margin: 0 0 12px 0; padding: 10px 12px; border-radius: 8px; font-weight: 600; position: sticky; top: 10px; z-index: 10; }
     .notice.ok { display: block; background: #e6f9ee; color: #1f7a3f; border: 1px solid #b5e9c7; }
+    .notice-extra { display: block; margin-top: 1em; font-size: 13px; font-weight: normal; color: #000; }
     .notice.err { display: block; background: #ffecec; color: #9f2f2f; border: 1px solid #f7bcbc; }
     .hp-field { position: absolute; left: -10000px; top: auto; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
   </style>
@@ -113,9 +114,13 @@
     const phoneRegex = /^\+7\d{10}$/;
     const cyrillicNameRegex = /^[А-Яа-яЁё]+(?:[ -][А-Яа-яЁё]+)*$/;
 
-    function showNotice(kind, text) {
+    function showNotice(kind, text, asHtml) {
       notice.className = "notice " + kind;
-      notice.textContent = text;
+      if (asHtml) {
+        notice.innerHTML = text;
+      } else {
+        notice.textContent = text;
+      }
     }
 
     function formatErrorDetails(details) {
@@ -199,10 +204,11 @@
         }
         showNotice(
           "ok",
-          "Контактные данные получены. Переходим к отправке запрошенных материалов. " +
-          "Сейчас на указанный Вами email-адрес придёт письмо для подтверждения оформленной подписки. " +
-          "Если письма нет во Входящих, пожалуйста, проверьте папку СПАМ, иногда наши письма ошибочно попадают туда. " +
-          "После подтверждения адреса, запрошенные материалы будут высланы автоматически."
+          "Контактные данные получены. Переходим к отправке материалов." +
+          "<span class=\"notice-extra\">Сейчас на указанный вами email-адрес придёт письмо для подтверждения подписки. " +
+          "Если письма нет в папке Входящие, пожалуйста, проверьте папку СПАМ, иногда наши письма ошибочно попадают туда. " +
+          "После подтверждения адреса, материалы будут высланы автоматически.</span>",
+          true
         );
         form.reset();
         updateSubmitState();

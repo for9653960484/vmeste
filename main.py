@@ -301,6 +301,12 @@ ADMIN_PAGE_HTML = """
     .row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: end; }
     .notice { margin-bottom: 12px; padding: 10px 12px; border-radius: 8px; font-weight: 600; display: none; }
     .notice.success { display: block; background: #e7f8ee; color: #146c2e; border: 1px solid #b7e7c4; }
+    .leads-table-wrap { overflow-x: auto; margin-top: 10px; }
+    .leads-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .leads-table th, .leads-table td { border: 1px solid #e4e8ef; padding: 8px 10px; text-align: left; vertical-align: top; }
+    .leads-table th { background: #f0f4fa; color: #445067; font-weight: 600; white-space: nowrap; }
+    .leads-table tbody tr:nth-child(even) { background: #fafbfd; }
+    .leads-empty { color: #6a778d; padding: 12px 0; }
   </style>
 </head>
 <body>
@@ -382,6 +388,29 @@ ADMIN_PAGE_HTML = """
   </div>
 
   <div class="card">
+    <h3>Текущие лиды</h3>
+    <div id="leadsListStatus" class="hint">Загрузка списка...</div>
+    <div class="leads-table-wrap">
+      <table id="leadsTable" class="leads-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Компания</th>
+            <th>ФИО</th>
+            <th>Email</th>
+            <th>Телефон</th>
+            <th>Источник</th>
+            <th>Статус</th>
+            <th>Рассылка</th>
+            <th>Дата</th>
+          </tr>
+        </thead>
+        <tbody id="leadsTableBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
     <h3>Ответ API</h3>
     <div id="result" class="result">{}</div>
   </div>
@@ -390,6 +419,8 @@ ADMIN_PAGE_HTML = """
     const resultEl = document.getElementById("result");
     const searchResultsEl = document.getElementById("searchResults");
     const noticeEl = document.getElementById("notice");
+    const leadsListStatusEl = document.getElementById("leadsListStatus");
+    const leadsTableBodyEl = document.getElementById("leadsTableBody");
     let noticeTimer = null;
 
     function showResult(data) {
@@ -417,6 +448,71 @@ ADMIN_PAGE_HTML = """
       return { error: "unexpected_response", status: response.status };
     }
 
+    function formatLeadDate(value) {
+      if (!value) return "—";
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? value : date.toLocaleString("ru-RU");
+    }
+
+    function renderLeadsTable(items) {
+      leadsTableBodyEl.innerHTML = "";
+      if (!items.length) {
+        const row = document.createElement("tr");
+        const cell = document.createElement("td");
+        cell.colSpan = 9;
+        cell.className = "leads-empty";
+        cell.textContent = "Лиды пока не добавлены";
+        row.appendChild(cell);
+        leadsTableBodyEl.appendChild(row);
+        return;
+      }
+
+      for (const lead of items) {
+        const row = document.createElement("tr");
+        const fullName = [lead.last_name, lead.first_name].filter(Boolean).join(" ");
+        const mailingStatus = lead.mailing_sent ? "отправлено" : "нет";
+        const cells = [
+          lead.id,
+          lead.company_name || "—",
+          fullName || "—",
+          lead.email || "—",
+          lead.phone || "—",
+          lead.source || "—",
+          lead.current_status || "—",
+          mailingStatus,
+          formatLeadDate(lead.created_at),
+        ];
+        for (const value of cells) {
+          const cell = document.createElement("td");
+          cell.textContent = value;
+          row.appendChild(cell);
+        }
+        leadsTableBodyEl.appendChild(row);
+      }
+    }
+
+    async function loadLeadsList() {
+      leadsListStatusEl.textContent = "Загрузка списка...";
+      try {
+        const response = await fetch("/admin/leads/search");
+        const data = await parseApiResponse(response);
+        if (!response.ok) {
+          leadsListStatusEl.textContent = "Не удалось загрузить список лидов";
+          renderLeadsTable([]);
+          return;
+        }
+        const items = data.items || [];
+        leadsListStatusEl.textContent = "Всего лидов: " + items.length;
+        renderLeadsTable(items);
+      } catch (err) {
+        leadsListStatusEl.textContent = "Ошибка загрузки списка лидов";
+        renderLeadsTable([]);
+        showResult({ error: "network_error", details: String(err) });
+      }
+    }
+
+    document.addEventListener("DOMContentLoaded", loadLeadsList);
+
     document.getElementById("createForm").addEventListener("submit", async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
@@ -443,6 +539,7 @@ ADMIN_PAGE_HTML = """
         if (r.ok && data.id) {
           showNotice("Новый контакт внесен в базу");
           e.target.reset();
+          await loadLeadsList();
         }
       } catch (err) {
         showResult({ error: "network_error", details: String(err) });
@@ -532,6 +629,9 @@ ADMIN_PAGE_HTML = """
         });
         const data = await parseApiResponse(r);
         showResult(data);
+        if (r.ok) {
+          await loadLeadsList();
+        }
       } catch (err) {
         showResult({ error: "network_error", details: String(err) });
       }

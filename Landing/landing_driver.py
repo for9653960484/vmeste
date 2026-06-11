@@ -24,7 +24,7 @@ MIN_FORM_FILL_SECONDS = int(os.getenv("MIN_FORM_FILL_SECONDS", "3"))
 RATE_LIMIT_STORAGE_URI = os.getenv("RATE_LIMIT_STORAGE_URI", "redis://127.0.0.1:6379/0")
 EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 PHONE_REGEX = re.compile(r"^\+7\d{10}$")
-CYRILLIC_NAME_REGEX = re.compile(r"^[А-Яа-яЁё\\-\\s]+$")
+CYRILLIC_NAME_REGEX = re.compile(r"^[А-Яа-яЁё]+(?:[ -][А-Яа-яЁё]+)*$")
 
 
 def resolve_rate_limit_storage_uri() -> str:

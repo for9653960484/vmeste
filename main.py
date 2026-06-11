@@ -445,7 +445,19 @@ ADMIN_PAGE_HTML = """
       if (contentType.includes("application/json")) {
         return await response.json();
       }
-      return { error: "unexpected_response", status: response.status };
+      const rawText = await response.text();
+      return {
+        error: "unexpected_response",
+        status: response.status,
+        details: rawText.slice(0, 300) || contentType,
+      };
+    }
+
+    function describeApiError(data, fallback) {
+      if (!data) return fallback;
+      if (typeof data.details === "string" && data.details.trim()) return data.details;
+      if (typeof data.error === "string" && data.error.trim()) return data.error;
+      return fallback;
     }
 
     function formatLeadDate(value) {
@@ -494,10 +506,12 @@ ADMIN_PAGE_HTML = """
     async function loadLeadsList() {
       leadsListStatusEl.textContent = "Загрузка списка...";
       try {
-        const response = await fetch("/admin/leads/search");
+        const response = await fetch("/admin/leads");
         const data = await parseApiResponse(response);
         if (!response.ok) {
-          leadsListStatusEl.textContent = "Не удалось загрузить список лидов";
+          const message = describeApiError(data, "ошибка сервера");
+          leadsListStatusEl.textContent = "Не удалось загрузить список лидов: " + message;
+          showResult(data);
           renderLeadsTable([]);
           return;
         }
@@ -643,6 +657,15 @@ ADMIN_PAGE_HTML = """
         if (!response.ok) {
           const errData = await parseApiResponse(response);
           showResult(errData);
+          showNotice("Не удалось скачать XLSX: " + describeApiError(errData, "ошибка сервера"));
+          return;
+        }
+
+        const contentType = response.headers.get("content-type") || "";
+        if (!contentType.includes("spreadsheetml") && !contentType.includes("octet-stream")) {
+          const errData = await parseApiResponse(response);
+          showResult(errData);
+          showNotice("Не удалось скачать XLSX: " + describeApiError(errData, "сервер вернул не файл"));
           return;
         }
 
@@ -666,6 +689,14 @@ ADMIN_PAGE_HTML = """
 """
 
 
+def format_row_datetime(value) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
 def row_to_lead_payload(row: dict) -> dict:
     return {
         "id": row["id"],
@@ -680,10 +711,10 @@ def row_to_lead_payload(row: dict) -> dict:
         "interest_type": row["interest_type"],
         "marketing_consent": bool(row.get("marketing_consent", False)),
         "mailing_sent": bool(row.get("mailing_sent", False)),
-        "mailing_sent_at": row["mailing_sent_at"].isoformat() if row.get("mailing_sent_at") else None,
+        "mailing_sent_at": format_row_datetime(row.get("mailing_sent_at")),
         "mailing_provider": row.get("mailing_provider"),
         "mailing_error": row.get("mailing_error"),
-        "created_at": row["created_at"].isoformat(),
+        "created_at": format_row_datetime(row.get("created_at")),
         "current_status": row.get("current_status"),
     }
 
@@ -840,15 +871,24 @@ def ensure_db_initialized() -> None:
                 ).scalar_one_or_none()
             if not column_exists:
                 raise
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE leads ADD COLUMN IF NOT EXISTS mailing_sent BOOLEAN NOT NULL DEFAULT FALSE"))
-            conn.execute(text("ALTER TABLE leads ADD COLUMN IF NOT EXISTS mailing_sent_at TIMESTAMPTZ NULL"))
-            conn.execute(text("ALTER TABLE leads ADD COLUMN IF NOT EXISTS mailing_provider TEXT NULL"))
-            conn.execute(text("ALTER TABLE leads ADD COLUMN IF NOT EXISTS mailing_error TEXT NULL"))
-            conn.execute(text("DROP INDEX IF EXISTS uq_leads_company_email"))
-            conn.execute(
-                text("CREATE INDEX IF NOT EXISTS idx_leads_company_email ON leads (company_name, email)")
-            )
+        try:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE leads ADD COLUMN IF NOT EXISTS mailing_sent BOOLEAN NOT NULL DEFAULT FALSE"))
+                conn.execute(text("ALTER TABLE leads ADD COLUMN IF NOT EXISTS mailing_sent_at TIMESTAMPTZ NULL"))
+                conn.execute(text("ALTER TABLE leads ADD COLUMN IF NOT EXISTS mailing_provider TEXT NULL"))
+                conn.execute(text("ALTER TABLE leads ADD COLUMN IF NOT EXISTS mailing_error TEXT NULL"))
+        except Exception as exc:
+            logger.warning("Could not ensure mailing columns: %s", exc)
+
+        try:
+            with engine.begin() as conn:
+                conn.execute(text("DROP INDEX IF EXISTS uq_leads_company_email"))
+                conn.execute(
+                    text("CREATE INDEX IF NOT EXISTS idx_leads_company_email ON leads (company_name, email)")
+                )
+        except Exception as exc:
+            logger.warning("Could not migrate leads index (duplicate signups may still be blocked): %s", exc)
+
         db_initialized = True
 
 
@@ -1113,6 +1153,12 @@ def root_page():
 def serve_material(filename: str):
     # Тестовая раздача материалов из папки проекта для ссылок в рассылке.
     return send_from_directory("materials", filename)
+
+
+@app.get("/admin/leads")
+def list_leads():
+    # Полный список лидов для admin UI.
+    return search_leads()
 
 
 @app.get("/admin/leads/search")

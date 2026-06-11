@@ -76,8 +76,8 @@ def landing_page_2():
 def submit_lead():
     payload = request.get_json(silent=True) or {}
 
-    # Honeypot: боты обычно заполняют все поля, включая скрытые.
-    if str(payload.get("website", "")).strip():
+    # Honeypot: скрытое поле bot_trap не должно заполняться человеком.
+    if str(payload.get("bot_trap", "")).strip() or str(payload.get("website", "")).strip():
         return jsonify({"error": "validation_error", "details": "bot_detected"}), 400
 
     loaded_at_ms = payload.get("loaded_at")

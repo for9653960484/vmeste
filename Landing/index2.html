@@ -22,7 +22,7 @@
     .notice { display: none; margin: 0 0 12px 0; padding: 10px 12px; border-radius: 8px; font-weight: 600; position: sticky; top: 10px; z-index: 10; }
     .notice.ok { display: block; background: #e6f9ee; color: #1f7a3f; border: 1px solid #b5e9c7; }
     .notice.err { display: block; background: #ffecec; color: #9f2f2f; border: 1px solid #f7bcbc; }
-    .hp-field { position: absolute; left: -10000px; top: auto; width: 1px; height: 1px; overflow: hidden; }
+    .hp-field { position: absolute; left: -10000px; top: auto; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
   </style>
 </head>
 <body>
@@ -34,8 +34,8 @@
 
       <form id="leadForm" novalidate autocomplete="off">
         <div class="hp-field" aria-hidden="true">
-          <label for="website">Ваш сайт</label>
-          <input id="website" name="website" type="text" tabindex="-1" autocomplete="off" />
+          <label for="bot_trap">Не заполняйте это поле</label>
+          <input id="bot_trap" name="bot_trap" type="text" tabindex="-1" autocomplete="off" aria-hidden="true" />
         </div>
         <div class="grid">
           <div>
@@ -140,6 +140,10 @@
         return;
       }
 
+      if (form.bot_trap.value.trim()) {
+        return;
+      }
+
       if (!email.validity.valid) {
         showNotice("err", "Проверьте корректность email-адреса.");
         return;
@@ -175,7 +179,7 @@
         company_name: form.company_name.value.trim(),
         employees_count: form.employees_count.value ? Number(form.employees_count.value) : null,
         marketing_consent: document.getElementById("marketing_consent").checked,
-        website: form.website.value.trim(),
+        bot_trap: form.bot_trap.value.trim(),
         loaded_at: loadedAt,
         consent: true
       };

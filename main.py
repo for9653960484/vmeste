@@ -845,6 +845,10 @@ def ensure_db_initialized() -> None:
             conn.execute(text("ALTER TABLE leads ADD COLUMN IF NOT EXISTS mailing_sent_at TIMESTAMPTZ NULL"))
             conn.execute(text("ALTER TABLE leads ADD COLUMN IF NOT EXISTS mailing_provider TEXT NULL"))
             conn.execute(text("ALTER TABLE leads ADD COLUMN IF NOT EXISTS mailing_error TEXT NULL"))
+            conn.execute(text("DROP INDEX IF EXISTS uq_leads_company_email"))
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS idx_leads_company_email ON leads (company_name, email)")
+            )
         db_initialized = True
 
 

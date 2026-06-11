@@ -40,11 +40,11 @@
         <div class="grid">
           <div>
             <label class="required" for="last_name">Фамилия</label>
-            <input id="last_name" name="last_name" required pattern="^[А-Яа-яЁё\-\s]+$" title="Только кириллица, пробел и дефис" autocomplete="off" />
+            <input id="last_name" name="last_name" required pattern="^[А-Яа-яЁё]+(?:[ -][А-Яа-яЁё]+)*$" title="Кириллица; допускается двойная фамилия через дефис, например Петров-Водкин" autocomplete="off" />
           </div>
           <div>
             <label class="required" for="first_name">Имя</label>
-            <input id="first_name" name="first_name" required pattern="^[А-Яа-яЁё\-\s]+$" title="Только кириллица, пробел и дефис" autocomplete="off" />
+            <input id="first_name" name="first_name" required pattern="^[А-Яа-яЁё]+(?:[ -][А-Яа-яЁё]+)*$" title="Кириллица; допускается двойное имя через дефис или пробел" autocomplete="off" />
           </div>
           <div>
             <label class="required" for="phone">Телефон</label>
@@ -110,7 +110,7 @@
     const lastName = document.getElementById("last_name");
     const loadedAt = Date.now();
     const phoneRegex = /^\+7\d{10}$/;
-    const cyrillicNameRegex = /^[А-Яа-яЁё\-\s]+$/;
+    const cyrillicNameRegex = /^[А-Яа-яЁё]+(?:[ -][А-Яа-яЁё]+)*$/;
 
     function showNotice(kind, text) {
       notice.className = "notice " + kind;
@@ -145,11 +145,11 @@
         return;
       }
       if (!cyrillicNameRegex.test(firstName.value.trim())) {
-        showNotice("err", "Имя должно быть введено кириллицей.");
+        showNotice("err", "Имя должно быть введено кириллицей (допускается дефис, например Анна-Мария).");
         return;
       }
       if (!cyrillicNameRegex.test(lastName.value.trim())) {
-        showNotice("err", "Фамилия должна быть введена кириллицей.");
+        showNotice("err", "Фамилия должна быть введена кириллицей (допускается дефис, например Петров-Водкин).");
         return;
       }
       if (!phoneRegex.test(phone.value.trim())) {
@@ -191,7 +191,13 @@
           showNotice("err", "Ошибка отправки: " + formatErrorDetails(data.details || data.error));
           return;
         }
-        showNotice("ok", "Контактные данные получены. Переходим к отправке запрошенных материалов.");
+        showNotice(
+          "ok",
+          "Контактные данные получены. Переходим к отправке запрошенных материалов. " +
+          "Сейчас на указанный Вами email-адрес придёт письмо для подтверждения оформленной подписки. " +
+          "Если письма нет во Входящих, пожалуйста, проверьте папку СПАМ, иногда наши письма ошибочно попадают туда. " +
+          "После подтверждения адреса, запрошенные материалы будут высланы автоматически."
+        );
         form.reset();
         updateSubmitState();
       } catch (err) {

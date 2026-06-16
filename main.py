@@ -225,6 +225,7 @@ DATABASE_URL = database_url
 UNISENDER_API_BASE_URL = os.getenv("UNISENDER_API_BASE_URL", "https://api.unisender.com/ru/api")
 UNISENDER_API_KEY = os.getenv("UNISENDER_API_KEY", os.getenv("EMAIL_SERVICE_API_KEY", ""))
 UNISENDER_LIST_IDS = os.getenv("UNISENDER_LIST_IDS", os.getenv("EMAIL_SERVICE_LIST_ID", ""))
+UNISENDER_LIST_IDS_BY_SOURCE_RAW = os.getenv("UNISENDER_LIST_IDS_BY_SOURCE", "")
 UNISENDER_SENDER_NAME = os.getenv("UNISENDER_SENDER_NAME", "VMESTE")
 UNISENDER_SENDER_EMAIL = os.getenv("UNISENDER_SENDER_EMAIL", "noreply@example.com")
 UNISENDER_MATERIAL_SUBJECT = os.getenv(
@@ -234,6 +235,32 @@ UNISENDER_MATERIAL_URL = os.getenv("UNISENDER_MATERIAL_URL", "https://example.co
 UNISENDER_ALLOWED_SOURCES = {
     item.strip() for item in os.getenv("UNISENDER_ALLOWED_SOURCES", "landing_1,landing_2").split(",") if item.strip()
 }
+
+
+def parse_unisender_list_ids_by_source(raw: str) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    if not raw:
+        return mapping
+    for pair in raw.split(";"):
+        pair = pair.strip()
+        if not pair:
+            continue
+        source, sep, list_ids = pair.partition(":")
+        source = source.strip()
+        list_ids = list_ids.strip()
+        if sep and source and list_ids:
+            mapping[source] = list_ids
+    return mapping
+
+
+UNISENDER_LIST_IDS_BY_SOURCE = parse_unisender_list_ids_by_source(UNISENDER_LIST_IDS_BY_SOURCE_RAW)
+
+
+def get_unisender_list_ids_for_source(source: Optional[str]) -> str:
+    if source and source in UNISENDER_LIST_IDS_BY_SOURCE:
+        return UNISENDER_LIST_IDS_BY_SOURCE[source]
+    return UNISENDER_LIST_IDS
+
 
 # Инициализация подключения к БД, сессий и пула фоновых задач.
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
@@ -969,13 +996,22 @@ def send_to_email_service(data: dict) -> None:
     email = data["email"]
     first_name = data["first_name"]
     last_name = data["last_name"]
+    list_ids = get_unisender_list_ids_for_source(source)
+    primary_list_id = list_ids.split(",")[0].strip() if list_ids else ""
+    if not list_ids:
+        logger.warning(
+            "Skipping UniSender sync: no list IDs configured for source '%s' (lead %s)",
+            source,
+            lead_id,
+        )
+        return
 
     try:
         # 1) Добавляем контакт в список рассылки.
         subscribe_payload = {
             "format": "json",
             "api_key": UNISENDER_API_KEY,
-            "list_ids": UNISENDER_LIST_IDS,
+            "list_ids": list_ids,
             "fields[email]": email,
             "fields[Name]": first_name,
             "fields[last_name]": last_name,
@@ -1006,7 +1042,7 @@ def send_to_email_service(data: dict) -> None:
             "sender_email": UNISENDER_SENDER_EMAIL,
             "subject": UNISENDER_MATERIAL_SUBJECT,
             "body": html_body,
-            "list_id": UNISENDER_LIST_IDS.split(",")[0] if UNISENDER_LIST_IDS else "",
+            "list_id": primary_list_id,
         }
         send_error: str | None = None
         try:

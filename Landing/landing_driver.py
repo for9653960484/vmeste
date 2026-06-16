@@ -56,6 +56,38 @@ def _stringify_error(data) -> str:
     return str(data)
 
 
+def _human_error_details(code: str) -> str:
+    messages = {
+        "bot_detected": "Не удалось отправить форму. Похоже, система распознала автоматическую отправку. Попробуйте еще раз вручную.",
+        "missing_loaded_at": "Не удалось проверить корректность отправки формы. Обновите страницу и попробуйте снова.",
+        "form_submitted_too_fast": "Форма отправлена слишком быстро. Пожалуйста, заполните поля вручную и повторите отправку.",
+        "invalid_first_name_cyrillic_only": "Проверьте имя: используйте кириллицу (например, Иван или Анна-Мария).",
+        "invalid_last_name_cyrillic_only": "Проверьте фамилию: используйте кириллицу (например, Петров или Петров-Водкин).",
+        "invalid_email_format": "Проверьте email: адрес введен в неверном формате.",
+        "invalid_phone_format_use_+7XXXXXXXXXX": "Проверьте телефон: используйте формат +7XXXXXXXXXX.",
+        "consent_required": "Чтобы отправить форму, подтвердите согласие на обработку персональных данных.",
+        "invalid_landing_id": "Не удалось определить страницу отправки. Обновите страницу и попробуйте снова.",
+        "duplicate_lead": "Такая заявка уже есть в системе. Если хотите, отправьте форму повторно с другим email.",
+        "db_error": "Не удалось сохранить заявку. Это временная ошибка сервиса, попробуйте еще раз через пару минут.",
+        "db_init_error": "Сервис временно недоступен. Мы уже работаем над восстановлением, пожалуйста, попробуйте позже.",
+        "crm_unreachable": "Сервис временно недоступен. Ваша заявка пока не отправлена, попробуйте через пару минут.",
+        "crm_error": "Не удалось обработать заявку из-за внутренней ошибки сервиса. Попробуйте позже.",
+    }
+    return messages.get(code, code)
+
+
+def _humanize_crm_error(data) -> str:
+    if isinstance(data, dict):
+        details = data.get("details")
+        error = data.get("error")
+        if isinstance(details, str) and details:
+            return _human_error_details(details)
+        if isinstance(error, str) and error:
+            return _human_error_details(error)
+    raw = _stringify_error(data)
+    return _human_error_details(raw)
+
+
 @app.get("/")
 def landing_page():
     return send_from_directory(".", "index.html")
@@ -78,46 +110,46 @@ def submit_lead():
 
     # Honeypot: скрытое поле bot_trap не должно заполняться человеком.
     if str(payload.get("bot_trap", "")).strip() or str(payload.get("website", "")).strip():
-        return jsonify({"error": "validation_error", "details": "bot_detected"}), 400
+        return jsonify({"error": "validation_error", "details": _human_error_details("bot_detected")}), 400
 
     loaded_at_ms = payload.get("loaded_at")
     try:
         loaded_at_ms = int(loaded_at_ms)
     except (TypeError, ValueError):
-        return jsonify({"error": "validation_error", "details": "missing_loaded_at"}), 400
+        return jsonify({"error": "validation_error", "details": _human_error_details("missing_loaded_at")}), 400
 
     now_ms = int(time.time() * 1000)
     elapsed_seconds = (now_ms - loaded_at_ms) / 1000
     if elapsed_seconds < MIN_FORM_FILL_SECONDS:
-        return jsonify({"error": "validation_error", "details": "form_submitted_too_fast"}), 400
+        return jsonify({"error": "validation_error", "details": _human_error_details("form_submitted_too_fast")}), 400
 
     required_fields = ["last_name", "first_name", "phone", "email"]
     missing = [field for field in required_fields if not str(payload.get(field, "")).strip()]
     if missing:
-        return jsonify({"error": "validation_error", "details": f"missing required fields: {', '.join(missing)}"}), 400
+        return jsonify({"error": "validation_error", "details": "Заполните обязательные поля формы: имя, фамилию, телефон и email."}), 400
 
     first_name = str(payload.get("first_name", "")).strip()
     last_name = str(payload.get("last_name", "")).strip()
     if not CYRILLIC_NAME_REGEX.fullmatch(first_name):
-        return jsonify({"error": "validation_error", "details": "invalid_first_name_cyrillic_only"}), 400
+        return jsonify({"error": "validation_error", "details": _human_error_details("invalid_first_name_cyrillic_only")}), 400
     if not CYRILLIC_NAME_REGEX.fullmatch(last_name):
-        return jsonify({"error": "validation_error", "details": "invalid_last_name_cyrillic_only"}), 400
+        return jsonify({"error": "validation_error", "details": _human_error_details("invalid_last_name_cyrillic_only")}), 400
 
     email = str(payload.get("email", "")).strip().lower()
     phone = str(payload.get("phone", "")).strip()
     if not EMAIL_REGEX.fullmatch(email):
-        return jsonify({"error": "validation_error", "details": "invalid_email_format"}), 400
+        return jsonify({"error": "validation_error", "details": _human_error_details("invalid_email_format")}), 400
     if not PHONE_REGEX.fullmatch(phone):
-        return jsonify({"error": "validation_error", "details": "invalid_phone_format_use_+7XXXXXXXXXX"}), 400
+        return jsonify({"error": "validation_error", "details": _human_error_details("invalid_phone_format_use_+7XXXXXXXXXX")}), 400
 
     consent = bool(payload.get("consent"))
     if not consent:
-        return jsonify({"error": "validation_error", "details": "consent_required"}), 400
+        return jsonify({"error": "validation_error", "details": _human_error_details("consent_required")}), 400
 
     landing_id = str(payload.get("landing_id", "")).strip().lower()
     source = LANDING_SOURCES.get(landing_id)
     if not source:
-        return jsonify({"error": "validation_error", "details": "invalid_landing_id"}), 400
+        return jsonify({"error": "validation_error", "details": _human_error_details("invalid_landing_id")}), 400
 
     crm_payload = {
         "company_name": str(payload.get("company_name", "")).strip() or "Не указана",
@@ -136,7 +168,8 @@ def submit_lead():
         response = requests.post(CRM_API_URL, json=crm_payload, timeout=15)
         data = response.json() if "application/json" in response.headers.get("content-type", "") else {}
     except requests.RequestException as exc:
-        return jsonify({"error": "crm_unreachable", "details": str(exc)}), 502
+        app.logger.warning("CRM unavailable: %s", exc)
+        return jsonify({"error": "crm_unreachable", "details": _human_error_details("crm_unreachable")}), 502
 
     if not response.ok:
         return (
@@ -144,7 +177,7 @@ def submit_lead():
                 {
                     "error": "crm_error",
                     "status_code": response.status_code,
-                    "details": _stringify_error(data),
+                    "details": _humanize_crm_error(data),
                     "crm_response": data,
                 }
             ),

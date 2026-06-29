@@ -1304,7 +1304,7 @@ def create_manual_lead():
 
 
 @app.get("/admin/login")
-def admin_login_page():
+def admin_login():
     if is_admin_authenticated():
         next_url = request.args.get("next", "/admin")
         if not next_url.startswith("/admin"):

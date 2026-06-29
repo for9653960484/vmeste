@@ -1,9 +1,11 @@
 import logging
 import os
+import secrets
+from functools import wraps
 from io import BytesIO
 from threading import Lock
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Optional
 
@@ -11,7 +13,17 @@ import openpyxl
 import requests
 import time
 from dotenv import load_dotenv
-from flask import Flask, jsonify, redirect, render_template_string, request, send_file, send_from_directory
+from flask import (
+    Flask,
+    jsonify,
+    redirect,
+    render_template_string,
+    request,
+    send_file,
+    send_from_directory,
+    session,
+    url_for,
+)
 from postgres_driver import PostgreSQLDriver
 from pydantic import BaseModel, EmailStr, ValidationError, field_validator
 from sqlalchemy import (
@@ -268,9 +280,76 @@ SessionLocal = sessionmaker(bind=engine, expire_on_commit=False, class_=Session)
 executor = ThreadPoolExecutor(max_workers=4)
 
 app = Flask(__name__)
+app.secret_key = os.getenv("FLASK_SECRET_KEY") or secrets.token_hex(32)
+app.permanent_session_lifetime = timedelta(hours=int(os.getenv("ADMIN_SESSION_HOURS", "8")))
+
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "").strip()
+ADMIN_LOGIN_MIN_FILL_SECONDS = int(os.getenv("ADMIN_LOGIN_MIN_FILL_SECONDS", "2"))
+ADMIN_LOGIN_MAX_ATTEMPTS = int(os.getenv("ADMIN_LOGIN_MAX_ATTEMPTS", "5"))
+ADMIN_LOGIN_WINDOW_SECONDS = int(os.getenv("ADMIN_LOGIN_WINDOW_SECONDS", "900"))
+
+_admin_login_attempts: dict[str, list[float]] = {}
+_admin_login_lock = Lock()
+
 db_init_lock = Lock()
 db_initialized = False
 driver = PostgreSQLDriver()
+
+
+def is_admin_authenticated() -> bool:
+    if not ADMIN_PASSWORD:
+        return False
+    return session.get("admin_authenticated") is True
+
+
+def is_admin_login_rate_limited(client_ip: str) -> bool:
+    now = time.time()
+    with _admin_login_lock:
+        attempts = [t for t in _admin_login_attempts.get(client_ip, []) if now - t < ADMIN_LOGIN_WINDOW_SECONDS]
+        _admin_login_attempts[client_ip] = attempts
+        return len(attempts) >= ADMIN_LOGIN_MAX_ATTEMPTS
+
+
+def record_admin_login_failure(client_ip: str) -> None:
+    now = time.time()
+    with _admin_login_lock:
+        attempts = _admin_login_attempts.setdefault(client_ip, [])
+        attempts.append(now)
+        _admin_login_attempts[client_ip] = [
+            t for t in attempts if now - t < ADMIN_LOGIN_WINDOW_SECONDS
+        ]
+
+
+def clear_admin_login_attempts(client_ip: str) -> None:
+    with _admin_login_lock:
+        _admin_login_attempts.pop(client_ip, None)
+
+
+def require_admin(f):
+    @wraps(f)
+    def wrapped(*args, **kwargs):
+        if not ADMIN_PASSWORD:
+            if request.path.startswith("/admin/leads") or request.method != "GET":
+                return jsonify({"error": "admin_disabled", "details": "ADMIN_PASSWORD not configured"}), 503
+            return (
+                render_template_string(
+                    "<h1>Админка отключена</h1><p>Задайте переменную окружения ADMIN_PASSWORD на сервере.</p>"
+                ),
+                503,
+            )
+        if is_admin_authenticated():
+            return f(*args, **kwargs)
+        is_api = request.path.startswith("/admin/leads") or request.method in (
+            "POST",
+            "PATCH",
+            "PUT",
+            "DELETE",
+        )
+        if is_api:
+            return jsonify({"error": "unauthorized"}), 401
+        return redirect(url_for("admin_login", next=request.path))
+
+    return wrapped
 
 
 def db_init_error_response(exc: Exception):
@@ -305,6 +384,46 @@ def check_driver_connection() -> None:
     finally:
         driver.disconnect()
 
+ADMIN_LOGIN_HTML = """
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Вход — VMESTE CRM Admin</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f7f9fc; color: #222; }
+    .card { width: min(420px, calc(100vw - 32px)); background: #fff; border: 1px solid #e4e8ef; border-radius: 12px; padding: 24px; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06); }
+    h1 { margin: 0 0 8px; font-size: 24px; }
+    .hint { color: #666; margin-bottom: 20px; font-size: 14px; }
+    label { display: block; font-size: 13px; margin-bottom: 6px; color: #555; }
+    input, button { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid #cfd6e4; box-sizing: border-box; font-size: 15px; }
+    button { margin-top: 16px; background: #1e63ff; color: white; border: none; cursor: pointer; font-weight: 600; }
+    .error { margin-bottom: 14px; padding: 10px 12px; border-radius: 8px; background: #fdecec; color: #b42318; border: 1px solid #f5c2c0; font-size: 14px; }
+    .hp { position: absolute; left: -10000px; top: auto; width: 1px; height: 1px; overflow: hidden; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>VMESTE CRM Admin</h1>
+    <div class="hint">Введите пароль для доступа к базе лидов</div>
+    {% if error %}<div class="error">{{ error }}</div>{% endif %}
+    <form method="post" action="/admin/login">
+      <input type="hidden" name="next" value="{{ next_url }}" />
+      <input type="hidden" name="loaded_at" value="{{ loaded_at }}" />
+      <div class="hp" aria-hidden="true">
+        <label for="bot_trap">Не заполняйте это поле</label>
+        <input id="bot_trap" name="bot_trap" type="text" tabindex="-1" autocomplete="off" />
+      </div>
+      <label for="password">Пароль</label>
+      <input id="password" name="password" type="password" required autofocus />
+      <button type="submit">Войти</button>
+    </form>
+  </div>
+</body>
+</html>
+"""
+
 ADMIN_PAGE_HTML = """
 <!doctype html>
 <html lang="ru">
@@ -334,10 +453,17 @@ ADMIN_PAGE_HTML = """
     .leads-table th { background: #f0f4fa; color: #445067; font-weight: 600; white-space: nowrap; }
     .leads-table tbody tr:nth-child(even) { background: #fafbfd; }
     .leads-empty { color: #6a778d; padding: 12px 0; }
+    .topbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 8px; }
+    .topbar h1 { margin: 0; }
+    .logout-link { color: #1e63ff; text-decoration: none; font-weight: 600; white-space: nowrap; }
+    .logout-link:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
-  <h1>VMESTE CRM Admin</h1>
+  <div class="topbar">
+    <h1>VMESTE CRM Admin</h1>
+    <a class="logout-link" href="/admin/logout">Выйти</a>
+  </div>
   <div class="hint">Добавление, поиск, редактирование лидов и экспорт в Excel</div>
   <div id="notice" class="notice"></div>
 
@@ -450,6 +576,15 @@ ADMIN_PAGE_HTML = """
     const leadsTableBodyEl = document.getElementById("leadsTableBody");
     let noticeTimer = null;
 
+    async function adminFetch(url, options = {}) {
+      const response = await fetch(url, { credentials: "same-origin", ...options });
+      if (response.status === 401) {
+        window.location.href = "/admin/login?next=" + encodeURIComponent(window.location.pathname);
+        throw new Error("unauthorized");
+      }
+      return response;
+    }
+
     function showResult(data) {
       resultEl.textContent = JSON.stringify(data, null, 2);
     }
@@ -533,7 +668,7 @@ ADMIN_PAGE_HTML = """
     async function loadLeadsList() {
       leadsListStatusEl.textContent = "Загрузка списка...";
       try {
-        const response = await fetch("/admin/leads");
+        const response = await adminFetch("/admin/leads");
         const data = await parseApiResponse(response);
         if (!response.ok) {
           const message = describeApiError(data, "ошибка сервера");
@@ -570,7 +705,7 @@ ADMIN_PAGE_HTML = """
       };
 
       try {
-        const r = await fetch("/admin/leads", {
+        const r = await adminFetch("/admin/leads", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
@@ -596,7 +731,7 @@ ADMIN_PAGE_HTML = """
       if (lastName) params.set("last_name", lastName);
       if (company) params.set("company_name", company);
 
-      const r = await fetch("/admin/leads/search?" + params.toString());
+      const r = await adminFetch("/admin/leads/search?" + params.toString());
       const data = await parseApiResponse(r);
       showResult(data);
 
@@ -663,7 +798,7 @@ ADMIN_PAGE_HTML = """
       if (employees_count) body.employees_count = Number(employees_count);
 
       try {
-        const r = await fetch("/admin/leads/" + id, {
+        const r = await adminFetch("/admin/leads/" + id, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
@@ -680,7 +815,7 @@ ADMIN_PAGE_HTML = """
 
     async function downloadExport() {
       try {
-        const response = await fetch("/admin/leads/export.xlsx");
+        const response = await adminFetch("/admin/leads/export.xlsx");
         if (!response.ok) {
           const errData = await parseApiResponse(response);
           showResult(errData);
@@ -1141,6 +1276,7 @@ def create_lead():
 
 
 @app.post("/admin/leads")
+@require_admin
 def create_manual_lead():
     # Ручное добавление лида через CRM-интерфейс/интеграции.
     try:
@@ -1167,13 +1303,86 @@ def create_manual_lead():
     return jsonify(result), 201
 
 
+@app.get("/admin/login")
+def admin_login_page():
+    if is_admin_authenticated():
+        next_url = request.args.get("next", "/admin")
+        if not next_url.startswith("/admin"):
+            next_url = "/admin"
+        return redirect(next_url)
+    if not ADMIN_PASSWORD:
+        return (
+            render_template_string(
+                "<h1>Админка отключена</h1><p>Задайте переменную окружения ADMIN_PASSWORD на сервере.</p>"
+            ),
+            503,
+        )
+    next_url = request.args.get("next", "/admin")
+    if not next_url.startswith("/admin"):
+        next_url = "/admin"
+    return render_template_string(
+        ADMIN_LOGIN_HTML,
+        error=request.args.get("error"),
+        next_url=next_url,
+        loaded_at=int(time.time()),
+    )
+
+
+@app.post("/admin/login")
+def admin_login_submit():
+    client_ip = request.remote_addr or "unknown"
+    if not ADMIN_PASSWORD:
+        return redirect(url_for("admin_login", error="Админка отключена"))
+    if is_admin_login_rate_limited(client_ip):
+        return redirect(
+            url_for(
+                "admin_login",
+                error="Слишком много попыток входа. Подождите 15 минут.",
+            )
+        )
+
+    bot_trap = (request.form.get("bot_trap") or "").strip()
+    if bot_trap:
+        record_admin_login_failure(client_ip)
+        return redirect(url_for("admin_login", error="Неверный пароль"))
+
+    try:
+        loaded_at = int(request.form.get("loaded_at") or "0")
+    except ValueError:
+        loaded_at = 0
+    if time.time() - loaded_at < ADMIN_LOGIN_MIN_FILL_SECONDS:
+        record_admin_login_failure(client_ip)
+        return redirect(url_for("admin_login", error="Неверный пароль"))
+
+    password = request.form.get("password") or ""
+    if not secrets.compare_digest(password, ADMIN_PASSWORD):
+        record_admin_login_failure(client_ip)
+        return redirect(url_for("admin_login", error="Неверный пароль"))
+
+    clear_admin_login_attempts(client_ip)
+    session["admin_authenticated"] = True
+    session.permanent = True
+    next_url = request.form.get("next", "/admin")
+    if not next_url.startswith("/admin"):
+        next_url = "/admin"
+    return redirect(next_url)
+
+
+@app.get("/admin/logout")
+def admin_logout():
+    session.pop("admin_authenticated", None)
+    return redirect(url_for("admin_login"))
+
+
 @app.get("/admin")
+@require_admin
 def admin_page():
     # Простая встроенная страница для ручной операционной работы.
     return render_template_string(ADMIN_PAGE_HTML)
 
 
 @app.get("/admin/")
+@require_admin
 def admin_page_slash():
     # Alias для URL со слэшем в конце.
     return render_template_string(ADMIN_PAGE_HTML)
@@ -1192,12 +1401,14 @@ def serve_material(filename: str):
 
 
 @app.get("/admin/leads")
+@require_admin
 def list_leads():
     # Полный список лидов для admin UI.
     return search_leads()
 
 
 @app.get("/admin/leads/search")
+@require_admin
 def search_leads():
     # Поиск по ID, фамилии/имени контакта или названию компании.
     try:
@@ -1269,6 +1480,7 @@ def search_leads():
 
 
 @app.patch("/admin/leads/<int:lead_id>")
+@require_admin
 def update_lead(lead_id: int):
     # Частичное редактирование найденного лида.
     try:
@@ -1317,6 +1529,7 @@ def update_lead(lead_id: int):
 
 
 @app.get("/admin/leads/export.xlsx")
+@require_admin
 def export_leads_to_xlsx():
     # Экспорт всех лидов в Excel для выгрузки и ручной работы маркетинга/продаж.
     try:
